@@ -15,6 +15,7 @@ repositories {
 dependencies {
     implementation(gradleApi())
     testImplementation(kotlin("test"))
+    testImplementation(gradleTestKit())
 }
 
 gradlePlugin {
