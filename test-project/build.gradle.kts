@@ -8,7 +8,7 @@ repositories {
 }
 
 dependencies {
-    testImplementation("org.junit.jupiter:junit-jupiter:5.10.0")
+    testImplementation("org.junit.jupiter:junit-jupiter:6.0.2") // https://central.sonatype.com/artifact/org.junit.jupiter/junit-jupiter/versions
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
