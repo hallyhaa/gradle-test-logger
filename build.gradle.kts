@@ -2,6 +2,7 @@ plugins {
     `kotlin-dsl`
     `java-gradle-plugin`
     `maven-publish`
+    id("org.owasp.dependencycheck") version "12.1.0"
 }
 
 group = "org.babelserver.gradle"
