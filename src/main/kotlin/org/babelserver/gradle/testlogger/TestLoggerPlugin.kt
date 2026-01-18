@@ -8,6 +8,7 @@ import org.gradle.api.flow.FlowParameters
 import org.gradle.api.flow.FlowScope
 import org.gradle.api.logging.Logger
 import org.gradle.api.provider.Property
+import org.gradle.api.provider.SetProperty
 import org.gradle.api.services.BuildService
 import org.gradle.api.services.BuildServiceParameters
 import org.gradle.api.services.ServiceReference
@@ -45,7 +46,7 @@ private object TestOutputStyle {
 abstract class TestLoggerBuildService : BuildService<TestLoggerBuildService.Params>, OperationCompletionListener, AutoCloseable {
 
     interface Params : BuildServiceParameters {
-        val testTaskPaths: Property<Set<String>>
+        val testTaskPaths: SetProperty<String>
     }
 
     private val upToDateTasks = mutableSetOf<String>()
