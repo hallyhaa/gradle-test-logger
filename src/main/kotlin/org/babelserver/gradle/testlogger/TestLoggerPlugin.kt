@@ -27,9 +27,21 @@ import javax.xml.parsers.DocumentBuilderFactory
 
 // Shared constants for test output formatting
 private object TestOutputStyle {
-    const val PASSED = "✅"
-    const val FAILED = "❌"
-    const val SKIPPED = "⏭️"
+
+    // Fallback on Windows w/o modern terminal
+    private val useAscii: Boolean by lazy {
+        System.getProperty("os.name")?.lowercase()?.contains("windows") == true
+                &&
+        System.getenv("WT_SESSION") == null && System.getenv("TERM_PROGRAM") == null
+    }
+
+    val PASSED: String get() = if (useAscii) "[OK]" else "✅"
+    val FAILED: String get() = if (useAscii) "[FAIL]" else "❌"
+    val SKIPPED: String get() = if (useAscii) "[SKIP]" else "⏭️"
+    val LINE_SINGLE: String get() = if (useAscii) "-" else "─"
+    val LINE_DOUBLE: String get() = if (useAscii) "=" else "═"
+
+    // ANSI codes - OK in cmd.exe since Win10, apparently
     const val ANSI_GREEN = "\u001B[32m"
     const val ANSI_RED = "\u001B[31m"
     const val ANSI_YELLOW = "\u001B[33m"
@@ -167,6 +179,7 @@ abstract class TestLoggerPlugin : Plugin<Project> {
             "testLoggerListener",
             TestLoggerBuildService::class.java
         ) {
+            @Suppress("kotlin:S6518") // Assignment syntax not available in plugin code
             parameters.testTaskPaths.set(testTaskPaths)
         }
 
@@ -174,6 +187,7 @@ abstract class TestLoggerPlugin : Plugin<Project> {
 
         // Use FlowScope to print the total as the build ends
         flowScope.always(PrintTotalAction::class.java) {
+            @Suppress("kotlin:S6518") // Assignment syntax not available in plugin code
             parameters.aggregatorService.set(aggregatorServiceProvider)
         }
     }
@@ -219,9 +233,9 @@ class KotlinTestHandler(
     fun taskStarted() {
         if (!TestOutputStyle.isEnabled()) return
         log("")
-        log("─".repeat(60))
+        log(TestOutputStyle.LINE_SINGLE.repeat(60))
         log(" T E S T S  ($taskName)")
-        log("─".repeat(60))
+        log(TestOutputStyle.LINE_SINGLE.repeat(60))
     }
 
     fun taskFinished() {
@@ -243,7 +257,7 @@ class KotlinTestHandler(
                     else -> TestOutputStyle.PASSED to TestOutputStyle.ANSI_GREEN
                 }
                 // Clean up test name - keep platform (browser/node) but remove version details
-                val cleanName = test.name.replace(Regex("\\[js, (\\w+), .*?]")) {
+                val cleanName = test.name.replace(Regex("\\[js, (\\w+), [^]]*]")) {
                     " [${it.groupValues[1]}]"
                 }.trim()
                 log("$color  $emoji $cleanName${TestOutputStyle.ANSI_RESET}")
@@ -258,11 +272,11 @@ class KotlinTestHandler(
         }
 
         // Print summary
-        log("─".repeat(60))
+        log(TestOutputStyle.LINE_SINGLE.repeat(60))
         val statusEmoji = if (results.totalFailed == 0) TestOutputStyle.PASSED else TestOutputStyle.FAILED
         val statusColor = if (results.totalFailed == 0) TestOutputStyle.ANSI_GREEN else TestOutputStyle.ANSI_RED
         log("$statusColor$statusEmoji Tests: ${results.totalTests}, Passed: ${results.totalPassed}, Failed: ${results.totalFailed}, Skipped: ${results.totalSkipped}${TestOutputStyle.ANSI_RESET}")
-        log("─".repeat(60))
+        log(TestOutputStyle.LINE_SINGLE.repeat(60))
         log("")
 
         // Report to aggregator
@@ -375,11 +389,11 @@ class TestAggregator {
         val statusColor = if (failedTests == 0) TestOutputStyle.ANSI_GREEN else TestOutputStyle.ANSI_RED
 
         logger.lifecycle("")
-        logger.lifecycle("${"═".repeat(60)}${TestOutputStyle.CLEAR_TO_EOL}")
+        logger.lifecycle("${TestOutputStyle.LINE_DOUBLE.repeat(60)}${TestOutputStyle.CLEAR_TO_EOL}")
         logger.lifecycle(" TOTAL ($tasksRun test tasks)${TestOutputStyle.CLEAR_TO_EOL}")
-        logger.lifecycle("${"═".repeat(60)}${TestOutputStyle.CLEAR_TO_EOL}")
+        logger.lifecycle("${TestOutputStyle.LINE_DOUBLE.repeat(60)}${TestOutputStyle.CLEAR_TO_EOL}")
         logger.lifecycle("$statusColor$statusEmoji Tests: $totalTests, Passed: $passedTests, Failed: $failedTests, Skipped: $skippedTests${TestOutputStyle.ANSI_RESET}${TestOutputStyle.CLEAR_TO_EOL}")
-        logger.lifecycle("${"═".repeat(60)}${TestOutputStyle.CLEAR_TO_EOL}")
+        logger.lifecycle("${TestOutputStyle.LINE_DOUBLE.repeat(60)}${TestOutputStyle.CLEAR_TO_EOL}")
     }
 }
 
@@ -405,19 +419,19 @@ class JvmTestReporter(
         if (!TestOutputStyle.isEnabled()) return
         taskWasRun = true
         log("")
-        log("─".repeat(60))
+        log(TestOutputStyle.LINE_SINGLE.repeat(60))
         log(" T E S T S  ($taskName)")
-        log("─".repeat(60))
+        log(TestOutputStyle.LINE_SINGLE.repeat(60))
     }
 
     fun taskFinished() {
         if (!taskWasRun) return
 
-        log("─".repeat(60))
+        log(TestOutputStyle.LINE_SINGLE.repeat(60))
         val statusEmoji = if (failedTests == 0) TestOutputStyle.PASSED else TestOutputStyle.FAILED
         val statusColor = if (failedTests == 0) TestOutputStyle.ANSI_GREEN else TestOutputStyle.ANSI_RED
         log("$statusColor$statusEmoji Tests: $totalTests, Passed: $passedTests, Failed: $failedTests, Skipped: $skippedTests${TestOutputStyle.ANSI_RESET}")
-        log("─".repeat(60))
+        log(TestOutputStyle.LINE_SINGLE.repeat(60))
         log("")
 
         aggregator.addResults(totalTests, passedTests, failedTests, skippedTests)
@@ -472,7 +486,7 @@ class JvmTestReporter(
         }
 
         if (!TestOutputStyle.isEnabled()) return
-        val testName = testDescriptor.displayName ?: testDescriptor.name
+        val testName = testDescriptor.displayName
         log("$color  $emoji $testName${TestOutputStyle.ANSI_RESET}")
     }
 }
