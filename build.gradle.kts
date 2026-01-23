@@ -1,6 +1,7 @@
 plugins {
     `kotlin-dsl`
     `java-gradle-plugin`
+    id("org.babelserver.gradle.test-logger") version "1.0.0"
     id("com.gradle.plugin-publish") version "2.0.0"
 }
 
