@@ -1,12 +1,12 @@
 plugins {
     `kotlin-dsl`
     `java-gradle-plugin`
-    id("org.babelserver.gradle.test-logger") version "1.0.0"
+    id("org.babelserver.gradle.test-logger") version "1.0.1"
     id("com.gradle.plugin-publish") version "2.0.0"
 }
 
 group = "org.babelserver.gradle"
-version = "1.0.0"
+version = "1.0.1"
 
 repositories {
     mavenCentral()
@@ -35,6 +35,10 @@ gradlePlugin {
             )
         }
     }
+}
+
+kotlin {
+    jvmToolchain(17)
 }
 
 tasks.test {
