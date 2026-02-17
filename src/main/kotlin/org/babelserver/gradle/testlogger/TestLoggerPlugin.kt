@@ -40,8 +40,15 @@ private object TestOutputStyle {
     const val ANSI_GREEN = "\u001B[32m"
     const val ANSI_RED = "\u001B[31m"
     const val ANSI_YELLOW = "\u001B[33m"
+    const val ANSI_DIM = "\u001B[2m"
     const val ANSI_RESET = "\u001B[0m"
     const val CLEAR_TO_EOL = "\u001B[K"
+
+    fun formatDuration(millis: Long): String {
+        val seconds = millis / 1000.0
+        return if (seconds >= 1.0) "$ANSI_DIM(${String.format("%.1f", seconds)}s)$ANSI_RESET"
+        else "$ANSI_DIM(${millis}ms)$ANSI_RESET"
+    }
 
     fun isEnabled(): Boolean {
         val env = System.getenv("TESTLOGGER_ENABLED")
@@ -243,7 +250,8 @@ class KotlinTestHandler(
                 val cleanName = test.name.replace(Regex("\\[js, (\\w+), [^]]*]")) {
                     " [${it.groupValues[1]}]"
                 }.trim()
-                log("$color  $emoji $cleanName${TestOutputStyle.ANSI_RESET}")
+                val duration = TestOutputStyle.formatDuration((test.time * 1000).toLong())
+                log("$color  $emoji $cleanName${TestOutputStyle.ANSI_RESET} $duration")
             }
 
             val statusColor = when {
@@ -298,6 +306,7 @@ class KotlinTestHandler(
                 for (i in 0 until testcaseNodes.length) {
                     val testcase = testcaseNodes.item(i)
                     val testName = testcase.attributes.getNamedItem("name")?.nodeValue ?: "unknown"
+                    val testTime = testcase.attributes.getNamedItem("time")?.nodeValue?.toDoubleOrNull() ?: 0.0
                     val hasFailure = testcase.childNodes.let { children ->
                         (0 until children.length).any {
                             val child = children.item(it)
@@ -307,7 +316,7 @@ class KotlinTestHandler(
                     val isSkipped = testcase.childNodes.let { children ->
                         (0 until children.length).any { children.item(it).nodeName == "skipped" }
                     }
-                    testCases.add(TestCaseResult(testName, hasFailure, isSkipped))
+                    testCases.add(TestCaseResult(testName, hasFailure, isSkipped, testTime))
                 }
 
                 classResults.add(ClassResult(className, testCases, failures, skipped, time))
@@ -342,7 +351,8 @@ class KotlinTestHandler(
     data class TestCaseResult(
         val name: String,
         val failed: Boolean,
-        val skipped: Boolean
+        val skipped: Boolean,
+        val time: Double = 0.0
     )
 }
 
@@ -513,7 +523,8 @@ class JvmTestReporter(
                 TestResult.ResultType.FAILURE -> TestOutputStyle.FAILED to TestOutputStyle.ANSI_RED
                 TestResult.ResultType.SKIPPED, null -> TestOutputStyle.SKIPPED to TestOutputStyle.ANSI_YELLOW
             }
-            log("$color  $emoji ${entry.descriptor.displayName}${TestOutputStyle.ANSI_RESET}")
+            val duration = TestOutputStyle.formatDuration(entry.result.endTime - entry.result.startTime)
+            log("$color  $emoji ${entry.descriptor.displayName}${TestOutputStyle.ANSI_RESET} $duration")
 
             if (entry.result.resultType == TestResult.ResultType.FAILURE) {
                 for (exception in entry.result.exceptions) {

@@ -104,6 +104,41 @@ class JvmTestReporterTest {
         assertTrue(logOutput.contains("Passed:"))
     }
 
+    @Test
+    fun outputIncludesDurationInMilliseconds() {
+        listener.taskStarted()
+        listener.afterTest(mockDescriptor("fastTest"), mockResult(TestResult.ResultType.SUCCESS, startTime = 0, endTime = 42))
+        listener.afterSuite(mockSuiteDescriptor(), mockSuiteResult(1, 0, 0, startTime = 0, endTime = 42))
+        listener.taskFinished()
+
+        val logOutput = mockLogger.messages.joinToString("\n")
+        assertTrue(logOutput.contains("(42ms)"), "Should show duration in milliseconds\nOutput:\n$logOutput")
+    }
+
+    @Test
+    fun outputIncludesDurationInSeconds() {
+        listener.taskStarted()
+        listener.afterTest(mockDescriptor("slowTest"), mockResult(TestResult.ResultType.SUCCESS, startTime = 0, endTime = 1500))
+        listener.afterSuite(mockSuiteDescriptor(), mockSuiteResult(1, 0, 0, startTime = 0, endTime = 1500))
+        listener.taskFinished()
+
+        val logOutput = mockLogger.messages.joinToString("\n")
+        val expected = String.format("%.1f", 1.5) // Locale-aware: "1.5" or "1,5"
+        assertTrue(logOutput.contains("(${expected}s)"), "Should show duration in seconds\nOutput:\n$logOutput")
+    }
+
+    @Test
+    fun outputIncludesClassHeaderOnFlush() {
+        listener.taskStarted()
+        listener.afterTest(mockDescriptor("myTest"), mockResult(TestResult.ResultType.SUCCESS))
+        listener.afterSuite(mockSuiteDescriptor(), mockSuiteResult(1, 0, 0))
+        listener.taskFinished()
+
+        val logOutput = mockLogger.messages.joinToString("\n")
+        assertTrue(logOutput.contains("Running com.example.TestClass"), "Should show class header\nOutput:\n$logOutput")
+        assertTrue(logOutput.contains("myTest"), "Should show test name\nOutput:\n$logOutput")
+    }
+
     // Mock implementations
 
     private fun mockDescriptor(name: String): TestDescriptor {
@@ -116,15 +151,55 @@ class JvmTestReporterTest {
         }
     }
 
-    private fun mockResult(resultType: TestResult.ResultType): TestResult {
+    private fun mockSuiteDescriptor(className: String = "com.example.TestClass"): TestDescriptor {
+        val parentDesc = object : TestDescriptor {
+            override fun getName() = "Gradle Test"
+            override fun getDisplayName() = "Gradle Test"
+            override fun getClassName(): String? = null
+            override fun getParent(): TestDescriptor? = null
+            override fun isComposite() = true
+        }
+        return object : TestDescriptor {
+            override fun getName() = className
+            override fun getDisplayName() = className
+            override fun getClassName() = className
+            override fun getParent() = parentDesc
+            override fun isComposite() = true
+        }
+    }
+
+    private fun mockResult(resultType: TestResult.ResultType, startTime: Long = 0, endTime: Long = 100): TestResult {
         return object : TestResult {
             override fun getResultType() = resultType
-            override fun getStartTime() = 0L
-            override fun getEndTime() = 100L
+            override fun getStartTime() = startTime
+            override fun getEndTime() = endTime
             override fun getTestCount() = 1L
             override fun getSuccessfulTestCount() = if (resultType == TestResult.ResultType.SUCCESS) 1L else 0L
             override fun getFailedTestCount() = if (resultType == TestResult.ResultType.FAILURE) 1L else 0L
             override fun getSkippedTestCount() = if (resultType == TestResult.ResultType.SKIPPED) 1L else 0L
+            override fun getException() = null
+            override fun getExceptions() = emptyList<Throwable>()
+            override fun getFailures() = emptyList<org.gradle.api.tasks.testing.TestFailure>()
+            override fun getAssumptionFailure(): org.gradle.api.tasks.testing.TestFailure? = null
+        }
+    }
+
+    private fun mockSuiteResult(
+        total: Long = 1, failed: Long = 0, skipped: Long = 0,
+        startTime: Long = 0, endTime: Long = 100
+    ): TestResult {
+        return object : TestResult {
+            override fun getResultType() = when {
+                failed > 0 -> TestResult.ResultType.FAILURE
+                skipped == total -> TestResult.ResultType.SKIPPED
+                else -> TestResult.ResultType.SUCCESS
+            }
+            override fun getStartTime() = startTime
+            override fun getEndTime() = endTime
+            override fun getTestCount() = total
+            override fun getSuccessfulTestCount() = total - failed - skipped
+            override fun getFailedTestCount() = failed
+            override fun getSkippedTestCount() = skipped
             override fun getException() = null
             override fun getExceptions() = emptyList<Throwable>()
             override fun getFailures() = emptyList<org.gradle.api.tasks.testing.TestFailure>()
