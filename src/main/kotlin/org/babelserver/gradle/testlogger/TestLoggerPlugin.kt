@@ -413,6 +413,11 @@ class JvmTestReporter(
     private val classStates = LinkedHashMap<String, ClassState>()
     private var activeClass: String? = null
 
+    // Foreground live output tracking
+    private var foregroundStarted = false
+    private var currentBaseMethod: String? = null
+    private val methodResults = mutableListOf<TestResultEntry>()
+
     private var totalTests = 0
     private var passedTests = 0
     private var failedTests = 0
@@ -422,6 +427,14 @@ class JvmTestReporter(
     private fun log(message: String) {
         if (TestOutputStyle.isEnabled()) {
             logger.lifecycle(message + TestOutputStyle.CLEAR_TO_EOL)
+        }
+    }
+
+    /** Overwrite the current line (no newline). Used for live progress counters. */
+    private fun printProgress(text: String) {
+        if (TestOutputStyle.isEnabled()) {
+            print("\r$text${TestOutputStyle.CLEAR_TO_EOL}")
+            System.out.flush()
         }
     }
 
@@ -437,8 +450,9 @@ class JvmTestReporter(
     fun taskFinished() {
         if (!taskWasRun) return
 
-        // Flush any remaining buffered classes
         synchronized(lock) {
+            finalizeForegroundMethod()
+            foregroundStarted = false
             flushCompleted()
         }
 
@@ -453,7 +467,6 @@ class JvmTestReporter(
     }
 
     override fun beforeSuite(suite: TestDescriptor) {
-        // No output here — class header is written when we flush the buffered results
     }
 
     override fun afterSuite(suite: TestDescriptor, result: TestResult) {
@@ -463,7 +476,20 @@ class JvmTestReporter(
         synchronized(lock) {
             val state = classStates.getOrPut(className) { ClassState(className) }
             state.suiteResult = result
-            flushCompleted()
+
+            if (className == activeClass && foregroundStarted) {
+                // Foreground class finished — finalize live output and print summary
+                finalizeForegroundMethod()
+                outputClassSummary(result)
+                classStates.remove(className)
+                foregroundStarted = false
+
+                // Pick next class from buffer
+                activeClass = pickNextClass()
+                flushCompleted()
+            } else {
+                flushCompleted()
+            }
         }
     }
 
@@ -483,75 +509,179 @@ class JvmTestReporter(
             val state = classStates.getOrPut(className) { ClassState(className) }
             state.results.add(TestResultEntry(testDescriptor, result))
 
-            // First result we see determines the active class
             if (activeClass == null) {
                 activeClass = className
             }
-            flushCompleted()
+
+            if (className == activeClass) {
+                // FOREGROUND: live output
+                if (!foregroundStarted) {
+                    foregroundStarted = true
+                    log("")
+                    log("${TestOutputStyle.ANSI_YELLOW}Running $className${TestOutputStyle.ANSI_RESET}")
+                }
+                handleForegroundResult(testDescriptor, result)
+            }
+            // Background classes: already buffered in state.results
         }
     }
 
-    /** Flush the active class if complete, then pick the next most-progressed class. */
+    // --- Foreground (live) output ---
+
+    private fun handleForegroundResult(descriptor: TestDescriptor, result: TestResult) {
+        if (!TestOutputStyle.isEnabled()) return
+
+        val baseMethod = extractBaseMethod(descriptor.displayName)
+        val isParam = isParameterized(descriptor.displayName)
+
+        if (isParam && baseMethod == currentBaseMethod) {
+            // Same parameterized method — update counter
+            methodResults.add(TestResultEntry(descriptor, result))
+            showMethodProgress()
+        } else {
+            // New method — finalize previous group if any
+            finalizeForegroundMethod()
+            currentBaseMethod = baseMethod
+            methodResults.clear()
+            methodResults.add(TestResultEntry(descriptor, result))
+
+            if (isParam) {
+                showMethodProgress()
+            } else {
+                // Non-parameterized: output immediately
+                outputSingleResult(descriptor, result)
+                currentBaseMethod = null
+                methodResults.clear()
+            }
+        }
+    }
+
+    private fun showMethodProgress() {
+        val count = methodResults.size
+        val failed = methodResults.count { it.result.resultType == TestResult.ResultType.FAILURE }
+        val color = if (failed > 0) TestOutputStyle.ANSI_RED else TestOutputStyle.ANSI_GREEN
+        printProgress("$color  ... $currentBaseMethod ($count running...)${TestOutputStyle.ANSI_RESET}")
+    }
+
+    private fun finalizeForegroundMethod() {
+        if (currentBaseMethod == null || methodResults.isEmpty()) return
+
+        if (methodResults.size == 1) {
+            // Only one result — was parameterized but only ran once, show as single
+            printProgress("") // clear progress line
+            outputSingleResult(methodResults[0].descriptor, methodResults[0].result)
+        } else {
+            // Group summary
+            printProgress("") // clear progress line
+            outputMethodGroup()
+        }
+        currentBaseMethod = null
+        methodResults.clear()
+    }
+
+    private fun outputMethodGroup() {
+        val count = methodResults.size
+        val failed = methodResults.count { it.result.resultType == TestResult.ResultType.FAILURE }
+        val skipped = methodResults.count { it.result.resultType == TestResult.ResultType.SKIPPED }
+        val minStart = methodResults.minOf { it.result.startTime }
+        val maxEnd = methodResults.maxOf { it.result.endTime }
+        val duration = TestOutputStyle.formatDuration(maxEnd - minStart)
+
+        if (failed > 0) {
+            log("${TestOutputStyle.ANSI_RED}  ${TestOutputStyle.FAILED} $currentBaseMethod ($failed/$count failed)${TestOutputStyle.ANSI_RESET} $duration")
+            // Show details for failed variations
+            for (entry in methodResults.filter { it.result.resultType == TestResult.ResultType.FAILURE }) {
+                log("${TestOutputStyle.ANSI_RED}    ${entry.descriptor.displayName}${TestOutputStyle.ANSI_RESET}")
+                for (exception in entry.result.exceptions) {
+                    val message = exception.message
+                    if (message != null) {
+                        log("${TestOutputStyle.ANSI_RED}      ${exception.javaClass.simpleName}: $message${TestOutputStyle.ANSI_RESET}")
+                    }
+                }
+            }
+            log("")
+        } else if (skipped > 0) {
+            log("${TestOutputStyle.ANSI_YELLOW}  ${TestOutputStyle.SKIPPED} $currentBaseMethod ($skipped/$count skipped)${TestOutputStyle.ANSI_RESET} $duration")
+        } else {
+            log("${TestOutputStyle.ANSI_GREEN}  ${TestOutputStyle.PASSED} $currentBaseMethod ($count passed)${TestOutputStyle.ANSI_RESET} $duration")
+        }
+    }
+
+    // --- Buffered output (for background classes) ---
+
+    /** Flush completed buffered classes, picking the most-progressed next. */
     private fun flushCompleted() {
         while (true) {
             val active = activeClass ?: break
             val state = classStates[active] ?: break
             if (!state.isComplete) break
+            if (foregroundStarted) break // don't flush over live foreground output
 
-            outputClass(state)
+            outputClassBuffered(state)
             classStates.remove(active)
-
-            // Pick next: prefer completed classes, then most results buffered
-            activeClass = classStates.entries
-                .sortedWith(
-                    compareByDescending<Map.Entry<String, ClassState>> { it.value.isComplete }
-                        .thenByDescending { it.value.results.size }
-                )
-                .firstOrNull()?.key
+            activeClass = pickNextClass()
         }
     }
 
-    private fun outputClass(state: ClassState) {
+    private fun pickNextClass(): String? {
+        return classStates.entries
+            .sortedWith(
+                compareByDescending<Map.Entry<String, ClassState>> { it.value.isComplete }
+                    .thenByDescending { it.value.results.size }
+            )
+            .firstOrNull()?.key
+    }
+
+    private fun outputClassBuffered(state: ClassState) {
         if (!TestOutputStyle.isEnabled()) return
 
         log("")
         log("${TestOutputStyle.ANSI_YELLOW}Running ${state.className}${TestOutputStyle.ANSI_RESET}")
 
         for (entry in state.results) {
-            val (emoji, color) = when (entry.result.resultType) {
-                TestResult.ResultType.SUCCESS -> TestOutputStyle.PASSED to TestOutputStyle.ANSI_GREEN
-                TestResult.ResultType.FAILURE -> TestOutputStyle.FAILED to TestOutputStyle.ANSI_RED
-                TestResult.ResultType.SKIPPED, null -> TestOutputStyle.SKIPPED to TestOutputStyle.ANSI_YELLOW
-            }
-            val duration = TestOutputStyle.formatDuration(entry.result.endTime - entry.result.startTime)
-            log("$color  $emoji ${entry.descriptor.displayName}${TestOutputStyle.ANSI_RESET} $duration")
-
-            if (entry.result.resultType == TestResult.ResultType.FAILURE) {
-                for (exception in entry.result.exceptions) {
-                    val message = exception.message
-                    if (message != null) {
-                        log("$color    ${exception.javaClass.simpleName}: $message${TestOutputStyle.ANSI_RESET}")
-                    } else {
-                        log("$color    ${exception.javaClass.simpleName}${TestOutputStyle.ANSI_RESET}")
-                    }
-                    log("$color      at ${formatLocation(exception)}${TestOutputStyle.ANSI_RESET}")
-                    var cause = exception.cause
-                    while (cause != null && cause !== exception) {
-                        val causeMsg = cause.message
-                        if (causeMsg != null) {
-                            log("$color        Caused by: ${cause.javaClass.simpleName}: $causeMsg${TestOutputStyle.ANSI_RESET}")
-                        } else {
-                            log("$color        Caused by: ${cause.javaClass.simpleName}${TestOutputStyle.ANSI_RESET}")
-                        }
-                        log("$color          at ${formatLocation(cause)}${TestOutputStyle.ANSI_RESET}")
-                        cause = cause.cause
-                    }
-                }
-                log("")
-            }
+            outputSingleResult(entry.descriptor, entry.result)
         }
 
-        val suiteResult = state.suiteResult!!
+        outputClassSummary(state.suiteResult!!)
+    }
+
+    // --- Shared output helpers ---
+
+    private fun outputSingleResult(descriptor: TestDescriptor, result: TestResult) {
+        val (emoji, color) = when (result.resultType) {
+            TestResult.ResultType.SUCCESS -> TestOutputStyle.PASSED to TestOutputStyle.ANSI_GREEN
+            TestResult.ResultType.FAILURE -> TestOutputStyle.FAILED to TestOutputStyle.ANSI_RED
+            TestResult.ResultType.SKIPPED, null -> TestOutputStyle.SKIPPED to TestOutputStyle.ANSI_YELLOW
+        }
+        val duration = TestOutputStyle.formatDuration(result.endTime - result.startTime)
+        log("$color  $emoji ${descriptor.displayName}${TestOutputStyle.ANSI_RESET} $duration")
+
+        if (result.resultType == TestResult.ResultType.FAILURE) {
+            for (exception in result.exceptions) {
+                val message = exception.message
+                if (message != null) {
+                    log("$color    ${exception.javaClass.simpleName}: $message${TestOutputStyle.ANSI_RESET}")
+                } else {
+                    log("$color    ${exception.javaClass.simpleName}${TestOutputStyle.ANSI_RESET}")
+                }
+                log("$color      at ${formatLocation(exception)}${TestOutputStyle.ANSI_RESET}")
+                var cause = exception.cause
+                while (cause != null && cause !== exception) {
+                    val causeMsg = cause.message
+                    if (causeMsg != null) {
+                        log("$color        Caused by: ${cause.javaClass.simpleName}: $causeMsg${TestOutputStyle.ANSI_RESET}")
+                    } else {
+                        log("$color        Caused by: ${cause.javaClass.simpleName}${TestOutputStyle.ANSI_RESET}")
+                    }
+                    log("$color          at ${formatLocation(cause)}${TestOutputStyle.ANSI_RESET}")
+                    cause = cause.cause
+                }
+            }
+            log("")
+        }
+    }
+
+    private fun outputClassSummary(suiteResult: TestResult) {
         val count = suiteResult.testCount
         val failed = suiteResult.failedTestCount
         val skipped = suiteResult.skippedTestCount
@@ -567,5 +697,19 @@ class JvmTestReporter(
     private fun formatLocation(throwable: Throwable): String {
         val element = throwable.stackTrace.firstOrNull()
         return if (element != null) "${element.fileName}:${element.lineNumber}" else "unknown"
+    }
+
+    companion object {
+        /** Extract base method name, stripping parameterized suffixes like [1] or (args)[1]. */
+        fun extractBaseMethod(displayName: String): String {
+            val bracketIdx = displayName.indexOf('[')
+            return if (bracketIdx > 0) displayName.substring(0, bracketIdx).trimEnd()
+            else displayName
+        }
+
+        /** Check if a test is parameterized (has [index] suffix). */
+        fun isParameterized(displayName: String): Boolean {
+            return displayName.contains('[') && displayName.contains(']')
+        }
     }
 }

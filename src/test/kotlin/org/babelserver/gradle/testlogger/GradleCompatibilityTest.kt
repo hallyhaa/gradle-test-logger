@@ -1,10 +1,12 @@
 package org.babelserver.gradle.testlogger
 
 import org.gradle.testkit.runner.GradleRunner
-import org.gradle.testkit.runner.TaskOutcome
 import java.io.File
 import kotlin.io.path.createTempDirectory
-import kotlin.test.*
+import kotlin.test.AfterTest
+import kotlin.test.BeforeTest
+import kotlin.test.Test
+import kotlin.test.assertTrue
 
 /**
  * Verifies that the plugin works with older Gradle versions.
