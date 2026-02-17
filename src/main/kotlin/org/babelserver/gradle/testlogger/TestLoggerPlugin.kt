@@ -528,10 +528,22 @@ class JvmTestReporter(
 
             if (entry.result.resultType == TestResult.ResultType.FAILURE) {
                 for (exception in entry.result.exceptions) {
-                    log("$color    ${exception.javaClass.simpleName} at ${formatLocation(exception)}${TestOutputStyle.ANSI_RESET}")
+                    val message = exception.message
+                    if (message != null) {
+                        log("$color    ${exception.javaClass.simpleName}: $message${TestOutputStyle.ANSI_RESET}")
+                    } else {
+                        log("$color    ${exception.javaClass.simpleName}${TestOutputStyle.ANSI_RESET}")
+                    }
+                    log("$color      at ${formatLocation(exception)}${TestOutputStyle.ANSI_RESET}")
                     var cause = exception.cause
                     while (cause != null && cause !== exception) {
-                        log("$color        Caused by: ${cause.javaClass.simpleName} at ${formatLocation(cause)}${TestOutputStyle.ANSI_RESET}")
+                        val causeMsg = cause.message
+                        if (causeMsg != null) {
+                            log("$color        Caused by: ${cause.javaClass.simpleName}: $causeMsg${TestOutputStyle.ANSI_RESET}")
+                        } else {
+                            log("$color        Caused by: ${cause.javaClass.simpleName}${TestOutputStyle.ANSI_RESET}")
+                        }
+                        log("$color          at ${formatLocation(cause)}${TestOutputStyle.ANSI_RESET}")
                         cause = cause.cause
                     }
                 }

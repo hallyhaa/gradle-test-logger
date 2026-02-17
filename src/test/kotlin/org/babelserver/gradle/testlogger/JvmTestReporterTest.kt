@@ -128,6 +128,43 @@ class JvmTestReporterTest {
     }
 
     @Test
+    fun failureOutputIncludesErrorMessage() {
+        listener.taskStarted()
+        val exception = AssertionError("expected <200> but was <404>")
+        listener.afterTest(mockDescriptor("failingTest"), mockResult(
+            TestResult.ResultType.FAILURE, exceptions = listOf(exception)
+        ))
+        listener.afterSuite(mockSuiteDescriptor(), mockSuiteResult(1, 1, 0))
+        listener.taskFinished()
+
+        val logOutput = mockLogger.messages.joinToString("\n")
+        assertTrue(logOutput.contains("expected <200> but was <404>"),
+            "Should show error message\nOutput:\n$logOutput")
+        assertTrue(logOutput.contains("AssertionError"),
+            "Should show exception type\nOutput:\n$logOutput")
+    }
+
+    @Test
+    fun failureOutputIncludesCauseMessage() {
+        listener.taskStarted()
+        val cause = IllegalStateException("connection refused")
+        val exception = RuntimeException("request failed", cause)
+        listener.afterTest(mockDescriptor("failingTest"), mockResult(
+            TestResult.ResultType.FAILURE, exceptions = listOf(exception)
+        ))
+        listener.afterSuite(mockSuiteDescriptor(), mockSuiteResult(1, 1, 0))
+        listener.taskFinished()
+
+        val logOutput = mockLogger.messages.joinToString("\n")
+        assertTrue(logOutput.contains("request failed"),
+            "Should show exception message\nOutput:\n$logOutput")
+        assertTrue(logOutput.contains("Caused by"),
+            "Should show cause chain\nOutput:\n$logOutput")
+        assertTrue(logOutput.contains("connection refused"),
+            "Should show cause message\nOutput:\n$logOutput")
+    }
+
+    @Test
     fun outputIncludesClassHeaderOnFlush() {
         listener.taskStarted()
         listener.afterTest(mockDescriptor("myTest"), mockResult(TestResult.ResultType.SUCCESS))
@@ -168,7 +205,11 @@ class JvmTestReporterTest {
         }
     }
 
-    private fun mockResult(resultType: TestResult.ResultType, startTime: Long = 0, endTime: Long = 100): TestResult {
+    private fun mockResult(
+        resultType: TestResult.ResultType,
+        startTime: Long = 0, endTime: Long = 100,
+        exceptions: List<Throwable> = emptyList()
+    ): TestResult {
         return object : TestResult {
             override fun getResultType() = resultType
             override fun getStartTime() = startTime
@@ -177,8 +218,8 @@ class JvmTestReporterTest {
             override fun getSuccessfulTestCount() = if (resultType == TestResult.ResultType.SUCCESS) 1L else 0L
             override fun getFailedTestCount() = if (resultType == TestResult.ResultType.FAILURE) 1L else 0L
             override fun getSkippedTestCount() = if (resultType == TestResult.ResultType.SKIPPED) 1L else 0L
-            override fun getException() = null
-            override fun getExceptions() = emptyList<Throwable>()
+            override fun getException() = exceptions.firstOrNull()
+            override fun getExceptions() = exceptions
             override fun getFailures() = emptyList<org.gradle.api.tasks.testing.TestFailure>()
             override fun getAssumptionFailure(): org.gradle.api.tasks.testing.TestFailure? = null
         }
