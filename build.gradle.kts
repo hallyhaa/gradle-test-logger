@@ -2,11 +2,11 @@ plugins {
     `kotlin-dsl`
     `java-gradle-plugin`
     id("org.babelserver.gradle.test-logger") version "1.0.1"
-    id("com.gradle.plugin-publish") version "2.0.0"
+    id("com.gradle.plugin-publish") version "2.0.0" // https://plugins.gradle.org/plugin/com.gradle.plugin-publish
 }
 
 group = "org.babelserver.gradle"
-version = "1.0.1"
+version = "1.1.0"
 
 repositories {
     mavenCentral()
@@ -38,7 +38,14 @@ gradlePlugin {
 }
 
 kotlin {
-    jvmToolchain(17)
+    jvmToolchain(21)
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+
+tasks.withType<JavaCompile> {
+    options.release.set(17)
 }
 
 tasks.test {

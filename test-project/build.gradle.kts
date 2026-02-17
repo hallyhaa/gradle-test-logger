@@ -1,6 +1,6 @@
 plugins {
     java
-    id("org.babelserver.gradle.test-logger") version "1.0.0"
+    id("org.babelserver.gradle.test-logger") version "1.0.1"
 }
 
 repositories {
@@ -8,7 +8,7 @@ repositories {
 }
 
 dependencies {
-    testImplementation("org.junit.jupiter:junit-jupiter:6.0.2") // https://central.sonatype.com/artifact/org.junit.jupiter/junit-jupiter/versions
+    testImplementation("org.junit.jupiter:junit-jupiter:6.0.3") // https://central.sonatype.com/artifact/org.junit.jupiter/junit-jupiter/versions
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 

@@ -195,6 +195,15 @@ abstract class TestLoggerPlugin : Plugin<Project> {
     private fun configureTestTask(testTask: Test, listener: JvmTestReporter) {
         testTask.addTestListener(listener)
 
+        // Suppress Gradle's default test failure output — the plugin handles it
+        testTask.testLogging {
+            // Gradle 8.x throws on emptySet() (EnumSet.copyOf limitation), Gradle 9+ allows it
+            try { events = emptySet() } catch (_: IllegalArgumentException) { /* Gradle 8.x */ }
+            showExceptions = false
+            showStackTraces = false
+            showCauses = false
+        }
+
         testTask.doFirst {
             listener.taskStarted()
         }
@@ -488,5 +497,22 @@ class JvmTestReporter(
         if (!TestOutputStyle.isEnabled()) return
         val testName = testDescriptor.displayName
         log("$color  $emoji $testName${TestOutputStyle.ANSI_RESET}")
+
+        if (result.resultType == TestResult.ResultType.FAILURE) {
+            for (exception in result.exceptions) {
+                log("$color    ${exception.javaClass.simpleName} at ${formatLocation(exception)}${TestOutputStyle.ANSI_RESET}")
+                var cause = exception.cause
+                while (cause != null && cause !== exception) {
+                    log("$color        Caused by: ${cause.javaClass.simpleName} at ${formatLocation(cause)}${TestOutputStyle.ANSI_RESET}")
+                    cause = cause.cause
+                }
+            }
+            log("")
+        }
+    }
+
+    private fun formatLocation(throwable: Throwable): String {
+        val element = throwable.stackTrace.firstOrNull()
+        return if (element != null) "${element.fileName}:${element.lineNumber}" else "unknown"
     }
 }
