@@ -3,15 +3,10 @@ package org.babelserver.gradle.testlogger
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.Task
-import org.gradle.api.flow.FlowAction
-import org.gradle.api.flow.FlowParameters
-import org.gradle.api.flow.FlowScope
 import org.gradle.api.logging.Logger
-import org.gradle.api.provider.Property
 import org.gradle.api.provider.SetProperty
 import org.gradle.api.services.BuildService
 import org.gradle.api.services.BuildServiceParameters
-import org.gradle.api.services.ServiceReference
 import org.gradle.api.tasks.testing.Test
 import org.gradle.api.tasks.testing.TestDescriptor
 import org.gradle.api.tasks.testing.TestListener
@@ -81,19 +76,7 @@ abstract class TestLoggerBuildService : BuildService<TestLoggerBuildService.Para
     }
 }
 
-// FlowAction for printing total results when the build ends
-abstract class PrintTotalAction : FlowAction<PrintTotalAction.Params> {
-    interface Params : FlowParameters {
-        @get:ServiceReference
-        val aggregatorService: Property<TestAggregatorService>
-    }
-
-    override fun execute(parameters: Params) {
-        parameters.aggregatorService.get().printTotal()
-    }
-}
-
-// BuildService that holds the aggregator and prints at the end
+// BuildService that holds the aggregator and prints at the end via close()
 abstract class TestAggregatorService : BuildService<TestAggregatorService.Params>, AutoCloseable {
 
     interface Params : BuildServiceParameters
@@ -132,9 +115,6 @@ abstract class TestLoggerPlugin : Plugin<Project> {
 
     @get:Inject
     abstract val eventsListenerRegistry: BuildEventsListenerRegistry
-
-    @get:Inject
-    abstract val flowScope: FlowScope
 
     override fun apply(project: Project) {
         // Check Gradle property
@@ -184,12 +164,6 @@ abstract class TestLoggerPlugin : Plugin<Project> {
         }
 
         eventsListenerRegistry.onTaskCompletion(listenerServiceProvider)
-
-        // Use FlowScope to print the total as the build ends
-        flowScope.always(PrintTotalAction::class.java) {
-            @Suppress("kotlin:S6518") // Assignment syntax not available in plugin code
-            parameters.aggregatorService.set(aggregatorServiceProvider)
-        }
     }
 
     private fun configureTestTask(testTask: Test, listener: JvmTestReporter) {
@@ -412,6 +386,23 @@ class JvmTestReporter(
     private val aggregator: TestAggregator
 ) : TestListener {
 
+    private data class TestResultEntry(
+        val descriptor: TestDescriptor,
+        val result: TestResult
+    )
+
+    private class ClassState(
+        val className: String,
+        val results: MutableList<TestResultEntry> = mutableListOf(),
+        var suiteResult: TestResult? = null
+    ) {
+        val isComplete get() = suiteResult != null
+    }
+
+    private val lock = Any()
+    private val classStates = LinkedHashMap<String, ClassState>()
+    private var activeClass: String? = null
+
     private var totalTests = 0
     private var passedTests = 0
     private var failedTests = 0
@@ -436,6 +427,11 @@ class JvmTestReporter(
     fun taskFinished() {
         if (!taskWasRun) return
 
+        // Flush any remaining buffered classes
+        synchronized(lock) {
+            flushCompleted()
+        }
+
         log(TestOutputStyle.LINE_SINGLE.repeat(60))
         val statusEmoji = if (failedTests == 0) TestOutputStyle.PASSED else TestOutputStyle.FAILED
         val statusColor = if (failedTests == 0) TestOutputStyle.ANSI_GREEN else TestOutputStyle.ANSI_RED
@@ -447,29 +443,17 @@ class JvmTestReporter(
     }
 
     override fun beforeSuite(suite: TestDescriptor) {
-        if (!TestOutputStyle.isEnabled()) return
-        // Show class names as the test suite starts
-        if (suite.className != null && suite.parent?.className == null) {
-            log("")
-            log("${TestOutputStyle.ANSI_YELLOW}Running ${suite.className}${TestOutputStyle.ANSI_RESET}")
-        }
+        // No output here — class header is written when we flush the buffered results
     }
 
     override fun afterSuite(suite: TestDescriptor, result: TestResult) {
-        if (!TestOutputStyle.isEnabled()) return
-        // Summary on class level
-        if (suite.className != null && suite.parent?.className == null) {
-            val count = result.testCount
-            val failed = result.failedTestCount
-            val skipped = result.skippedTestCount
-            val time = (result.endTime - result.startTime) / 1000.0
+        val className = suite.className ?: return
+        if (suite.parent?.className != null) return
 
-            val statusColor = when {
-                failed > 0 -> TestOutputStyle.ANSI_RED
-                skipped > 0 -> TestOutputStyle.ANSI_YELLOW
-                else -> TestOutputStyle.ANSI_GREEN
-            }
-            log("$statusColor  Tests run: $count, Failures: $failed, Skipped: $skipped, Time: ${String.format("%.3f", time)}s${TestOutputStyle.ANSI_RESET}")
+        synchronized(lock) {
+            val state = classStates.getOrPut(className) { ClassState(className) }
+            state.suiteResult = result
+            flushCompleted()
         }
     }
 
@@ -478,37 +462,83 @@ class JvmTestReporter(
 
     override fun afterTest(testDescriptor: TestDescriptor, result: TestResult) {
         totalTests++
-
-        val (emoji, color) = when (result.resultType) {
-            TestResult.ResultType.SUCCESS -> {
-                passedTests++
-                TestOutputStyle.PASSED to TestOutputStyle.ANSI_GREEN
-            }
-            TestResult.ResultType.FAILURE -> {
-                failedTests++
-                TestOutputStyle.FAILED to TestOutputStyle.ANSI_RED
-            }
-            TestResult.ResultType.SKIPPED, null -> {
-                skippedTests++
-                TestOutputStyle.SKIPPED to TestOutputStyle.ANSI_YELLOW
-            }
+        when (result.resultType) {
+            TestResult.ResultType.SUCCESS -> passedTests++
+            TestResult.ResultType.FAILURE -> failedTests++
+            TestResult.ResultType.SKIPPED, null -> skippedTests++
         }
 
+        val className = testDescriptor.className ?: return
+        synchronized(lock) {
+            val state = classStates.getOrPut(className) { ClassState(className) }
+            state.results.add(TestResultEntry(testDescriptor, result))
+
+            // First result we see determines the active class
+            if (activeClass == null) {
+                activeClass = className
+            }
+            flushCompleted()
+        }
+    }
+
+    /** Flush the active class if complete, then pick the next most-progressed class. */
+    private fun flushCompleted() {
+        while (true) {
+            val active = activeClass ?: break
+            val state = classStates[active] ?: break
+            if (!state.isComplete) break
+
+            outputClass(state)
+            classStates.remove(active)
+
+            // Pick next: prefer completed classes, then most results buffered
+            activeClass = classStates.entries
+                .sortedWith(
+                    compareByDescending<Map.Entry<String, ClassState>> { it.value.isComplete }
+                        .thenByDescending { it.value.results.size }
+                )
+                .firstOrNull()?.key
+        }
+    }
+
+    private fun outputClass(state: ClassState) {
         if (!TestOutputStyle.isEnabled()) return
-        val testName = testDescriptor.displayName
-        log("$color  $emoji $testName${TestOutputStyle.ANSI_RESET}")
 
-        if (result.resultType == TestResult.ResultType.FAILURE) {
-            for (exception in result.exceptions) {
-                log("$color    ${exception.javaClass.simpleName} at ${formatLocation(exception)}${TestOutputStyle.ANSI_RESET}")
-                var cause = exception.cause
-                while (cause != null && cause !== exception) {
-                    log("$color        Caused by: ${cause.javaClass.simpleName} at ${formatLocation(cause)}${TestOutputStyle.ANSI_RESET}")
-                    cause = cause.cause
-                }
+        log("")
+        log("${TestOutputStyle.ANSI_YELLOW}Running ${state.className}${TestOutputStyle.ANSI_RESET}")
+
+        for (entry in state.results) {
+            val (emoji, color) = when (entry.result.resultType) {
+                TestResult.ResultType.SUCCESS -> TestOutputStyle.PASSED to TestOutputStyle.ANSI_GREEN
+                TestResult.ResultType.FAILURE -> TestOutputStyle.FAILED to TestOutputStyle.ANSI_RED
+                TestResult.ResultType.SKIPPED, null -> TestOutputStyle.SKIPPED to TestOutputStyle.ANSI_YELLOW
             }
-            log("")
+            log("$color  $emoji ${entry.descriptor.displayName}${TestOutputStyle.ANSI_RESET}")
+
+            if (entry.result.resultType == TestResult.ResultType.FAILURE) {
+                for (exception in entry.result.exceptions) {
+                    log("$color    ${exception.javaClass.simpleName} at ${formatLocation(exception)}${TestOutputStyle.ANSI_RESET}")
+                    var cause = exception.cause
+                    while (cause != null && cause !== exception) {
+                        log("$color        Caused by: ${cause.javaClass.simpleName} at ${formatLocation(cause)}${TestOutputStyle.ANSI_RESET}")
+                        cause = cause.cause
+                    }
+                }
+                log("")
+            }
         }
+
+        val suiteResult = state.suiteResult!!
+        val count = suiteResult.testCount
+        val failed = suiteResult.failedTestCount
+        val skipped = suiteResult.skippedTestCount
+        val time = (suiteResult.endTime - suiteResult.startTime) / 1000.0
+        val statusColor = when {
+            failed > 0 -> TestOutputStyle.ANSI_RED
+            skipped > 0 -> TestOutputStyle.ANSI_YELLOW
+            else -> TestOutputStyle.ANSI_GREEN
+        }
+        log("$statusColor  Tests run: $count, Failures: $failed, Skipped: $skipped, Time: ${String.format("%.3f", time)}s${TestOutputStyle.ANSI_RESET}")
     }
 
     private fun formatLocation(throwable: Throwable): String {
