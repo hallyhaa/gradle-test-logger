@@ -98,7 +98,7 @@ class GradleCompatibilityTest {
             .forwardOutput()
             .build()
 
-        assertTrue(result1.output.contains("T E S T S"), "First run should produce test output")
+        assertTrue(result1.output.contains("Babelserver test-logger"), "First run should produce test output")
         assertTrue(result1.output.contains("Configuration cache entry stored"),
             "Should store configuration cache entry")
 
@@ -145,7 +145,7 @@ class GradleCompatibilityTest {
             .buildAndFail() // We expect failure because of the failing test
 
         val output = result.output
-        assertTrue(output.contains("T E S T S"), "Should contain test header (Gradle $gradleVersion)\nOutput:\n$output")
+        assertTrue(output.contains("Babelserver test-logger"), "Should contain test header (Gradle $gradleVersion)\nOutput:\n$output")
         assertTrue(output.contains("passing"), "Should show passing test (Gradle $gradleVersion)")
         assertTrue(output.contains("failing"), "Should show failing test (Gradle $gradleVersion)")
     }

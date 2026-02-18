@@ -105,7 +105,7 @@ class TestSuitesFunctionalTest {
         assertEquals(TaskOutcome.SUCCESS, result.task(":integrationTest")?.outcome)
 
         val output = result.output
-        assertTrue(output.contains("T E S T S"), "Should contain test header")
+        assertTrue(output.contains("Babelserver test-logger"), "Should contain test header")
         assertTrue(output.contains("UnitTest") || output.contains("unitTestPasses"),
             "Should contain unit test output")
         assertTrue(output.contains("IntegrationTest") || output.contains("integrationTestPasses"),

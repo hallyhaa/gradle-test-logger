@@ -89,7 +89,7 @@ class JvmTestReporterTest {
         listener.taskStarted()
 
         val logOutput = mockLogger.messages.joinToString("\n")
-        assertTrue(logOutput.contains("T E S T S"))
+        assertTrue(logOutput.contains("Babelserver test-logger"))
         assertTrue(logOutput.contains("test"))
     }
 
@@ -174,6 +174,91 @@ class JvmTestReporterTest {
         val logOutput = mockLogger.messages.joinToString("\n")
         assertTrue(logOutput.contains("Running com.example.TestClass"), "Should show class header\nOutput:\n$logOutput")
         assertTrue(logOutput.contains("myTest"), "Should show test name\nOutput:\n$logOutput")
+    }
+
+    // --- showIndividualResults tests ---
+
+    @Test
+    fun showIndividualResultsFalseHidesAllPerClassOutput() {
+        val reporter = JvmTestReporter("test", mockLogger, aggregator, showIndividualResults = false)
+        reporter.taskStarted()
+
+        reporter.afterTest(mockDescriptor("myTest"), mockResult(TestResult.ResultType.SUCCESS))
+        reporter.afterSuite(mockSuiteDescriptor(), mockSuiteResult(1, 0, 0))
+        reporter.taskFinished()
+
+        val logOutput = mockLogger.messages.joinToString("\n")
+        assertTrue(logOutput.contains("Babelserver test-logger"),
+            "Should still show task header\nOutput:\n$logOutput")
+        assertTrue(logOutput.contains("Tests: 1"),
+            "Should still show task summary\nOutput:\n$logOutput")
+        assertFalse(logOutput.contains("Running com.example.TestClass"),
+            "Should NOT show class header\nOutput:\n$logOutput")
+        assertFalse(logOutput.contains("Tests run:"),
+            "Should NOT show per-class summary\nOutput:\n$logOutput")
+        assertFalse(logOutput.contains("myTest"),
+            "Should NOT show individual test name\nOutput:\n$logOutput")
+    }
+
+    @Test
+    fun showIndividualResultsFalseStillCountsResults() {
+        val reporter = JvmTestReporter("test", mockLogger, aggregator, showIndividualResults = false)
+        reporter.taskStarted()
+
+        reporter.afterTest(mockDescriptor("test1"), mockResult(TestResult.ResultType.SUCCESS))
+        reporter.afterTest(mockDescriptor("test2"), mockResult(TestResult.ResultType.FAILURE))
+        reporter.afterTest(mockDescriptor("test3"), mockResult(TestResult.ResultType.SKIPPED))
+        reporter.taskFinished()
+
+        val logOutput = mockLogger.messages.joinToString("\n")
+        assertTrue(logOutput.contains("Tests: 3"),
+            "Should count all tests in task summary\nOutput:\n$logOutput")
+        assertTrue(logOutput.contains("Passed: 1"),
+            "Should count passed\nOutput:\n$logOutput")
+        assertTrue(logOutput.contains("Failed: 1"),
+            "Should count failed\nOutput:\n$logOutput")
+    }
+
+    // --- groupParameterizedTests tests ---
+
+    @Test
+    fun groupParameterizedTestsFalseShowsEachVariation() {
+        val reporter = JvmTestReporter("test", mockLogger, aggregator, groupParameterizedTests = false)
+        reporter.taskStarted()
+
+        reporter.afterTest(mockDescriptor("isPrime(int)[1]"), mockResult(TestResult.ResultType.SUCCESS))
+        reporter.afterTest(mockDescriptor("isPrime(int)[2]"), mockResult(TestResult.ResultType.SUCCESS))
+        reporter.afterTest(mockDescriptor("isPrime(int)[3]"), mockResult(TestResult.ResultType.SUCCESS))
+        reporter.afterSuite(mockSuiteDescriptor(), mockSuiteResult(3, 0, 0))
+        reporter.taskFinished()
+
+        val logOutput = mockLogger.messages.joinToString("\n")
+        assertTrue(logOutput.contains("isPrime(int)[1]"),
+            "Should show first variation\nOutput:\n$logOutput")
+        assertTrue(logOutput.contains("isPrime(int)[2]"),
+            "Should show second variation\nOutput:\n$logOutput")
+        assertTrue(logOutput.contains("isPrime(int)[3]"),
+            "Should show third variation\nOutput:\n$logOutput")
+        assertFalse(logOutput.contains("passed)"),
+            "Should NOT show grouped summary\nOutput:\n$logOutput")
+    }
+
+    @Test
+    fun defaultGroupParameterizedTestsGroupsVariations() {
+        // Default behavior: groupParameterizedTests = true
+        listener.taskStarted()
+
+        listener.afterTest(mockDescriptor("isPrime(int)[1]"), mockResult(TestResult.ResultType.SUCCESS))
+        listener.afterTest(mockDescriptor("isPrime(int)[2]"), mockResult(TestResult.ResultType.SUCCESS))
+        listener.afterTest(mockDescriptor("isPrime(int)[3]"), mockResult(TestResult.ResultType.SUCCESS))
+        listener.afterSuite(mockSuiteDescriptor(), mockSuiteResult(3, 0, 0))
+        listener.taskFinished()
+
+        val logOutput = mockLogger.messages.joinToString("\n")
+        assertTrue(logOutput.contains("3 passed"),
+            "Should show grouped summary\nOutput:\n$logOutput")
+        assertFalse(logOutput.contains("isPrime(int)[1]"),
+            "Should NOT show individual variations\nOutput:\n$logOutput")
     }
 
     // Mock implementations

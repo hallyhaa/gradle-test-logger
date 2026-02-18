@@ -1,4 +1,4 @@
-# Gradle Test Logger Plugin
+# Babelserver Test Logger
 
 A Gradle plugin that provides informative test output with status indicators for each test − inspired by Maven's
 Surefire output.
@@ -17,7 +17,7 @@ Surefire output.
 **Single test task:**
 ```
 ────────────────────────────────────────────────────────────
- T E S T S  (test)
+ Babelserver test-logger · my-project (test)
 ────────────────────────────────────────────────────────────
 
 Running demo.DemoTest
@@ -39,14 +39,14 @@ at the end:
 
 ```
 ────────────────────────────────────────────────────────────
- T E S T S  (test)
+ Babelserver test-logger · my-project (test)
 ────────────────────────────────────────────────────────────
 ...
 ✅ Tests: 68, Passed: 68, Failed: 0, Skipped: 0
 ────────────────────────────────────────────────────────────
 
 ────────────────────────────────────────────────────────────
- T E S T S  (jsBrowserTest)
+ Babelserver test-logger · my-project (jsBrowserTest)
 ────────────────────────────────────────────────────────────
 ...
 ✅ Tests: 51, Passed: 51, Failed: 0, Skipped: 0
@@ -95,6 +95,30 @@ allprojects {
 
 This makes the plugin active for **all** Gradle projects on your machine without any extra configuration in the project
 files themselves. This also keeps the plugin local to your machine − collaborators aren't affected.
+
+## Configuration
+
+The plugin works out of the box with no configuration. If you want to adjust its behavior, use the `testLogger` block
+in your `build.gradle.kts`:
+
+```kotlin
+testLogger {
+    showIndividualResults = false   // default: true
+    groupParameterizedTests = false // default: true
+}
+```
+
+| Setting                    | Default | Description                                                                                      |
+|----------------------------|---------|--------------------------------------------------------------------------------------------------|
+| `showIndividualResults`    | `true`  | When `false`, suppresses all per-class output (headers, test lines, class summaries). Only the task header and final summary are shown. |
+| `groupParameterizedTests`  | `true`  | When `false`, shows each parameterized test variation on its own line instead of a group summary. |
+
+Both settings can be overridden per-run with `-P` flags, which take priority over the DSL:
+
+```bash
+gradle test -Ptestlogger.showIndividualResults=false
+gradle test -Ptestlogger.groupParameterizedTests=false
+```
 
 ## Disabling the plugin
 

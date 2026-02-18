@@ -4,6 +4,7 @@ import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.Task
 import org.gradle.api.logging.Logger
+import org.gradle.api.provider.Property
 import org.gradle.api.provider.SetProperty
 import org.gradle.api.services.BuildService
 import org.gradle.api.services.BuildServiceParameters
@@ -105,6 +106,16 @@ abstract class TestAggregatorService : BuildService<TestAggregatorService.Params
     }
 }
 
+abstract class TestLoggerExtension {
+    abstract val showIndividualResults: Property<Boolean>
+    abstract val groupParameterizedTests: Property<Boolean>
+
+    init {
+        showIndividualResults.convention(true)
+        groupParameterizedTests.convention(true)
+    }
+}
+
 abstract class TestLoggerPlugin : Plugin<Project> {
 
     companion object {
@@ -130,6 +141,8 @@ abstract class TestLoggerPlugin : Plugin<Project> {
             return
         }
 
+        val extension = project.extensions.create("testLogger", TestLoggerExtension::class.java)
+
         val gradle = project.gradle
 
         // Register aggregator service (shared across all projects in the build)
@@ -146,7 +159,11 @@ abstract class TestLoggerPlugin : Plugin<Project> {
 
         // Standard JVM Test tasks
         project.tasks.withType(Test::class.java).configureEach {
-            val listener = JvmTestReporter(this.name, this.logger, aggregator)
+            val showIndividual = project.findProperty("testlogger.showIndividualResults")?.toString()?.toBoolean()
+                ?: extension.showIndividualResults.get()
+            val groupParam = project.findProperty("testlogger.groupParameterizedTests")?.toString()?.toBoolean()
+                ?: extension.groupParameterizedTests.get()
+            val listener = JvmTestReporter(this.name, this.logger, aggregator, project.name, showIndividual, groupParam)
             testTaskPaths.add(this.path)
             configureTestTask(this, listener)
         }
@@ -157,7 +174,9 @@ abstract class TestLoggerPlugin : Plugin<Project> {
             val className = task.javaClass.name
             // Check if this is a Kotlin test task (but not already a standard Test task)
             if (task !is Test && isKotlinTestTask(className)) {
-                configureKotlinTestTask(task, project, aggregator)
+                val showIndividual = project.findProperty("testlogger.showIndividualResults")?.toString()?.toBoolean()
+                    ?: extension.showIndividualResults.get()
+                configureKotlinTestTask(task, project, aggregator, showIndividual)
             }
         }
 
@@ -194,8 +213,8 @@ abstract class TestLoggerPlugin : Plugin<Project> {
         }
     }
 
-    private fun configureKotlinTestTask(task: Task, project: Project, aggregator: TestAggregator) {
-        val handler = KotlinTestHandler(task.name, task.logger, aggregator, project.layout.buildDirectory.asFile.get())
+    private fun configureKotlinTestTask(task: Task, project: Project, aggregator: TestAggregator, showIndividualResults: Boolean) {
+        val handler = KotlinTestHandler(task.name, task.logger, aggregator, project.layout.buildDirectory.asFile.get(), project.name, showIndividualResults)
 
         task.doFirst {
             handler.taskStarted()
@@ -212,7 +231,9 @@ class KotlinTestHandler(
     private val taskName: String,
     private val logger: Logger,
     private val aggregator: TestAggregator,
-    private val buildDir: File
+    private val buildDir: File,
+    private val projectName: String = "",
+    private val showIndividualResults: Boolean = true
 ) {
     private fun log(message: String) {
         if (TestOutputStyle.isEnabled()) {
@@ -224,7 +245,7 @@ class KotlinTestHandler(
         if (!TestOutputStyle.isEnabled()) return
         log("")
         log(TestOutputStyle.LINE_SINGLE.repeat(60))
-        log(" T E S T S  ($taskName)")
+        log(" Babelserver test-logger${if (projectName.isNotEmpty()) " · $projectName" else ""} ($taskName)")
         log(TestOutputStyle.LINE_SINGLE.repeat(60))
     }
 
@@ -236,30 +257,32 @@ class KotlinTestHandler(
         val results = parseTestResults(resultsDir)
 
         // Print per-class results
-        for (classResult in results.classResults) {
-            log("")
-            log("${TestOutputStyle.ANSI_YELLOW}Running ${classResult.className}${TestOutputStyle.ANSI_RESET}")
+        if (showIndividualResults) {
+            for (classResult in results.classResults) {
+                log("")
+                log("${TestOutputStyle.ANSI_YELLOW}Running ${classResult.className}${TestOutputStyle.ANSI_RESET}")
 
-            for (test in classResult.tests) {
-                val (emoji, color) = when {
-                    test.failed -> TestOutputStyle.FAILED to TestOutputStyle.ANSI_RED
-                    test.skipped -> TestOutputStyle.SKIPPED to TestOutputStyle.ANSI_YELLOW
-                    else -> TestOutputStyle.PASSED to TestOutputStyle.ANSI_GREEN
+                for (test in classResult.tests) {
+                    val (emoji, color) = when {
+                        test.failed -> TestOutputStyle.FAILED to TestOutputStyle.ANSI_RED
+                        test.skipped -> TestOutputStyle.SKIPPED to TestOutputStyle.ANSI_YELLOW
+                        else -> TestOutputStyle.PASSED to TestOutputStyle.ANSI_GREEN
+                    }
+                    // Clean up test name - keep platform (browser/node) but remove version details
+                    val cleanName = test.name.replace(Regex("\\[js, (\\w+), [^]]*]")) {
+                        " [${it.groupValues[1]}]"
+                    }.trim()
+                    val duration = TestOutputStyle.formatDuration((test.time * 1000).toLong())
+                    log("$color  $emoji $cleanName${TestOutputStyle.ANSI_RESET} $duration")
                 }
-                // Clean up test name - keep platform (browser/node) but remove version details
-                val cleanName = test.name.replace(Regex("\\[js, (\\w+), [^]]*]")) {
-                    " [${it.groupValues[1]}]"
-                }.trim()
-                val duration = TestOutputStyle.formatDuration((test.time * 1000).toLong())
-                log("$color  $emoji $cleanName${TestOutputStyle.ANSI_RESET} $duration")
-            }
 
-            val statusColor = when {
-                classResult.failures > 0 -> TestOutputStyle.ANSI_RED
-                classResult.skipped > 0 -> TestOutputStyle.ANSI_YELLOW
-                else -> TestOutputStyle.ANSI_GREEN
+                val statusColor = when {
+                    classResult.failures > 0 -> TestOutputStyle.ANSI_RED
+                    classResult.skipped > 0 -> TestOutputStyle.ANSI_YELLOW
+                    else -> TestOutputStyle.ANSI_GREEN
+                }
+                log("$statusColor  Tests run: ${classResult.tests.size}, Failures: ${classResult.failures}, Skipped: ${classResult.skipped}, Time: ${String.format("%.3f", classResult.time)}s${TestOutputStyle.ANSI_RESET}")
             }
-            log("$statusColor  Tests run: ${classResult.tests.size}, Failures: ${classResult.failures}, Skipped: ${classResult.skipped}, Time: ${String.format("%.3f", classResult.time)}s${TestOutputStyle.ANSI_RESET}")
         }
 
         // Print summary
@@ -393,7 +416,10 @@ class TestAggregator {
 class JvmTestReporter(
     private val taskName: String,
     private val logger: Logger,
-    private val aggregator: TestAggregator
+    private val aggregator: TestAggregator,
+    private val projectName: String = "",
+    private val showIndividualResults: Boolean = true,
+    private val groupParameterizedTests: Boolean = true
 ) : TestListener {
 
     private data class TestResultEntry(
@@ -443,7 +469,7 @@ class JvmTestReporter(
         taskWasRun = true
         log("")
         log(TestOutputStyle.LINE_SINGLE.repeat(60))
-        log(" T E S T S  ($taskName)")
+        log(" Babelserver test-logger${if (projectName.isNotEmpty()) " · $projectName" else ""} ($taskName)")
         log(TestOutputStyle.LINE_SINGLE.repeat(60))
     }
 
@@ -480,7 +506,9 @@ class JvmTestReporter(
             if (className == activeClass && foregroundStarted) {
                 // Foreground class finished — finalize live output and print summary
                 finalizeForegroundMethod()
-                outputClassSummary(result)
+                if (showIndividualResults) {
+                    outputClassSummary(result)
+                }
                 classStates.remove(className)
                 foregroundStarted = false
 
@@ -517,10 +545,14 @@ class JvmTestReporter(
                 // FOREGROUND: live output
                 if (!foregroundStarted) {
                     foregroundStarted = true
-                    log("")
-                    log("${TestOutputStyle.ANSI_YELLOW}Running $className${TestOutputStyle.ANSI_RESET}")
+                    if (showIndividualResults) {
+                        log("")
+                        log("${TestOutputStyle.ANSI_YELLOW}Running $className${TestOutputStyle.ANSI_RESET}")
+                    }
                 }
-                handleForegroundResult(testDescriptor, result)
+                if (showIndividualResults) {
+                    handleForegroundResult(testDescriptor, result)
+                }
             }
             // Background classes: already buffered in state.results
         }
@@ -530,6 +562,11 @@ class JvmTestReporter(
 
     private fun handleForegroundResult(descriptor: TestDescriptor, result: TestResult) {
         if (!TestOutputStyle.isEnabled()) return
+
+        if (!groupParameterizedTests) {
+            outputSingleResult(descriptor, result)
+            return
+        }
 
         val baseMethod = extractBaseMethod(descriptor.displayName)
         val isParam = isParameterized(descriptor.displayName)
@@ -588,7 +625,7 @@ class JvmTestReporter(
         val duration = TestOutputStyle.formatDuration(maxEnd - minStart)
 
         if (failed > 0) {
-            log("${TestOutputStyle.ANSI_RED}  ${TestOutputStyle.FAILED} $currentBaseMethod ($failed/$count failed)${TestOutputStyle.ANSI_RESET} $duration")
+            log("${TestOutputStyle.ANSI_RED}  ${TestOutputStyle.FAILED} $currentBaseMethod${TestOutputStyle.ANSI_RESET} ${TestOutputStyle.ANSI_DIM}($failed/$count failed)${TestOutputStyle.ANSI_RESET} $duration")
             // Show details for failed variations
             for (entry in methodResults.filter { it.result.resultType == TestResult.ResultType.FAILURE }) {
                 log("${TestOutputStyle.ANSI_RED}    ${entry.descriptor.displayName}${TestOutputStyle.ANSI_RESET}")
@@ -601,9 +638,9 @@ class JvmTestReporter(
             }
             log("")
         } else if (skipped > 0) {
-            log("${TestOutputStyle.ANSI_YELLOW}  ${TestOutputStyle.SKIPPED} $currentBaseMethod ($skipped/$count skipped)${TestOutputStyle.ANSI_RESET} $duration")
+            log("${TestOutputStyle.ANSI_YELLOW}  ${TestOutputStyle.SKIPPED} $currentBaseMethod${TestOutputStyle.ANSI_RESET} ${TestOutputStyle.ANSI_DIM}($skipped/$count skipped)${TestOutputStyle.ANSI_RESET} $duration")
         } else {
-            log("${TestOutputStyle.ANSI_GREEN}  ${TestOutputStyle.PASSED} $currentBaseMethod ($count passed)${TestOutputStyle.ANSI_RESET} $duration")
+            log("${TestOutputStyle.ANSI_GREEN}  ${TestOutputStyle.PASSED} $currentBaseMethod${TestOutputStyle.ANSI_RESET} ${TestOutputStyle.ANSI_DIM}($count passed)${TestOutputStyle.ANSI_RESET} $duration")
         }
     }
 
@@ -634,6 +671,7 @@ class JvmTestReporter(
 
     private fun outputClassBuffered(state: ClassState) {
         if (!TestOutputStyle.isEnabled()) return
+        if (!showIndividualResults) return
 
         log("")
         log("${TestOutputStyle.ANSI_YELLOW}Running ${state.className}${TestOutputStyle.ANSI_RESET}")
