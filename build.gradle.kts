@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "org.babelserver.gradle"
-version = "1.1.0"
+version = "2.0.0"
 
 repositories {
     mavenCentral()
@@ -27,7 +27,7 @@ gradlePlugin {
         create("testLogger") {
             id = "org.babelserver.gradle.test-logger"
             implementationClass = "org.babelserver.gradle.testlogger.TestLoggerPlugin"
-            displayName = "Test Logger Plugin"
+            displayName = "Babelserver Test Logger"
             description = "Provides pretty test output with status indicators for each test"
             tags = listOf(
                 "testing", "test", "logging", "output", "reporting",

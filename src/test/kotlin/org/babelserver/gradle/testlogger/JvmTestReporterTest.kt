@@ -261,6 +261,37 @@ class JvmTestReporterTest {
             "Should NOT show individual variations\nOutput:\n$logOutput")
     }
 
+    // --- skip reason tests ---
+
+    @Test
+    fun skippedTestShowsReasonFromException() {
+        listener.taskStarted()
+        val reason = org.opentest4j.TestAbortedException("waiting for API v2")
+        listener.afterTest(mockDescriptor("futureTest"), mockResult(
+            TestResult.ResultType.SKIPPED, exceptions = listOf(reason)
+        ))
+        listener.afterSuite(mockSuiteDescriptor(), mockSuiteResult(1, 0, 1))
+        listener.taskFinished()
+
+        val logOutput = mockLogger.messages.joinToString("\n")
+        assertTrue(logOutput.contains("waiting for API v2"),
+            "Should show skip reason\nOutput:\n$logOutput")
+    }
+
+    @Test
+    fun skippedTestWithoutReasonShowsNoReason() {
+        listener.taskStarted()
+        listener.afterTest(mockDescriptor("disabledTest"), mockResult(TestResult.ResultType.SKIPPED))
+        listener.afterSuite(mockSuiteDescriptor(), mockSuiteResult(1, 0, 1))
+        listener.taskFinished()
+
+        val logOutput = mockLogger.messages.joinToString("\n")
+        assertTrue(logOutput.contains("disabledTest"),
+            "Should show test name\nOutput:\n$logOutput")
+        assertFalse(logOutput.contains("—"),
+            "Should NOT show reason separator when no reason\nOutput:\n$logOutput")
+    }
+
     // Mock implementations
 
     private fun mockDescriptor(name: String): TestDescriptor {

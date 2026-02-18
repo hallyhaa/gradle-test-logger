@@ -33,7 +33,7 @@ private object TestOutputStyle {
 
     val PASSED: String get() = if (useAscii) "[OK]" else "✅"
     val FAILED: String get() = if (useAscii) "[FAIL]" else "❌"
-    val SKIPPED: String get() = if (useAscii) "[SKIP]" else "⏭️"
+    val SKIPPED: String get() = if (useAscii) "[SKIP]" else "⏭️ "
     val LINE_SINGLE: String get() = if (useAscii) "-" else "─"
     val LINE_DOUBLE: String get() = if (useAscii) "=" else "═"
 
@@ -273,7 +273,11 @@ class KotlinTestHandler(
                         " [${it.groupValues[1]}]"
                     }.trim()
                     val duration = TestOutputStyle.formatDuration((test.time * 1000).toLong())
-                    log("$color  $emoji $cleanName${TestOutputStyle.ANSI_RESET} $duration")
+                    if (test.skipReason != null) {
+                        log("$color  $emoji $cleanName — ${test.skipReason}${TestOutputStyle.ANSI_RESET} $duration")
+                    } else {
+                        log("$color  $emoji $cleanName${TestOutputStyle.ANSI_RESET} $duration")
+                    }
                 }
 
                 val statusColor = when {
@@ -336,10 +340,18 @@ class KotlinTestHandler(
                             child.nodeName == "failure" || child.nodeName == "error"
                         }
                     }
-                    val isSkipped = testcase.childNodes.let { children ->
-                        (0 until children.length).any { children.item(it).nodeName == "skipped" }
+                    var isSkipped = false
+                    var skipMessage: String? = null
+                    testcase.childNodes.let { children ->
+                        for (j in 0 until children.length) {
+                            val child = children.item(j)
+                            if (child.nodeName == "skipped") {
+                                isSkipped = true
+                                skipMessage = child.attributes?.getNamedItem("message")?.nodeValue
+                            }
+                        }
                     }
-                    testCases.add(TestCaseResult(testName, hasFailure, isSkipped, testTime))
+                    testCases.add(TestCaseResult(testName, hasFailure, isSkipped, testTime, skipMessage))
                 }
 
                 classResults.add(ClassResult(className, testCases, failures, skipped, time))
@@ -375,7 +387,8 @@ class KotlinTestHandler(
         val name: String,
         val failed: Boolean,
         val skipped: Boolean,
-        val time: Double = 0.0
+        val time: Double = 0.0,
+        val skipReason: String? = null
     )
 }
 
@@ -692,7 +705,15 @@ class JvmTestReporter(
             TestResult.ResultType.SKIPPED, null -> TestOutputStyle.SKIPPED to TestOutputStyle.ANSI_YELLOW
         }
         val duration = TestOutputStyle.formatDuration(result.endTime - result.startTime)
-        log("$color  $emoji ${descriptor.displayName}${TestOutputStyle.ANSI_RESET} $duration")
+        val skipReason = if (result.resultType == TestResult.ResultType.SKIPPED) {
+            result.exceptions.firstOrNull()?.message
+                ?: result.assumptionFailure?.rawFailure?.message
+        } else null
+        if (skipReason != null) {
+            log("$color  $emoji ${descriptor.displayName} — $skipReason${TestOutputStyle.ANSI_RESET} $duration")
+        } else {
+            log("$color  $emoji ${descriptor.displayName}${TestOutputStyle.ANSI_RESET} $duration")
+        }
 
         if (result.resultType == TestResult.ResultType.FAILURE) {
             for (exception in result.exceptions) {
