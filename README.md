@@ -23,7 +23,7 @@ When a test is skipped via `assumeTrue()` or `assumeFalse()`, the plugin display
 For tests disabled with `@Disabled("reason")` and the other conditional annotations (`@DisabledOnOs`,
 `@DisabledIfEnvironmentVariable`, etc.), the reason is **not** available. This is a Gradle limitation — JUnit Platform
 passes the reason string to Gradle, but Gradle's internal test listener bridge discards it before it reaches plugin code.
-We've [asked the Gradle team to address this](https://github.com/gradle/gradle/issues/5511#issuecomment-3921193408).
+We've [asked the Gradle team to address this](https://github.com/gradle/gradle/issues/36931).
 
 ## Sample Output
 

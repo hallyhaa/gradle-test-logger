@@ -1,8 +1,8 @@
 plugins {
     `kotlin-dsl`
     `java-gradle-plugin`
-    id("org.babelserver.gradle.test-logger") version "1.0.1"
-    id("com.gradle.plugin-publish") version "2.0.0" // https://plugins.gradle.org/plugin/com.gradle.plugin-publish
+    id("org.babelserver.gradle.test-logger") version "2.0.0" // https://plugins.gradle.org/plugin/org.babelserver.gradle.test-logger
+    id("com.gradle.plugin-publish") version "2.1.0" // https://plugins.gradle.org/plugin/com.gradle.plugin-publish
 }
 
 group = "org.babelserver.gradle"
